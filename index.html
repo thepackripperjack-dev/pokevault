@@ -1,0 +1,354 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PokéVault - Card Collection</title>
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;font-family:Arial,sans-serif;
+  background:#101522;color:#fff;
+}
+header{
+  padding:22px;text-align:center;
+  background:linear-gradient(120deg,#e63946,#7438c5);
+}
+header h1{margin:0;font-size:30px}
+header p{margin:8px 0 0}
+main{max-width:1050px;margin:auto;padding:20px}
+.stats{
+  display:grid;grid-template-columns:repeat(3,1fr);
+  gap:12px;margin-bottom:22px;
+}
+.stat,.panel{
+  background:#1c2435;border-radius:14px;padding:17px;
+}
+.stat span{color:#bdc7d9;font-size:13px}
+.stat h2{margin:10px 0 0;font-size:24px}
+h2,h3{margin-top:0}
+input,button{
+  border:0;border-radius:9px;padding:12px;font-size:15px;
+}
+input{background:#fff;color:#111;min-width:0}
+button{
+  background:#f6c945;color:#151515;font-weight:bold;
+  cursor:pointer;
+}
+button:hover{filter:brightness(.93)}
+.searchrow{display:flex;gap:8px;margin-bottom:12px}
+.searchrow input{flex:1;width:100%}
+#photo{width:100%;margin:10px 0}
+.hint{color:#bdc7d9;font-size:13px;line-height:1.5}
+.cards{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+  gap:14px;margin-top:15px;
+}
+.card{
+  background:#273249;border-radius:12px;padding:12px;
+  display:flex;flex-direction:column;gap:9px;
+}
+.card img{
+  width:100%;height:225px;object-fit:contain;
+}
+.card h3{font-size:16px;margin:0}
+.card p{font-size:13px;color:#d2d8e5;margin:0;line-height:1.5}
+.card button{margin-top:auto}
+.price{font-size:19px;font-weight:bold;color:#ffe17b}
+.remove{background:#e65b68;color:white}
+#message{margin:12px 0;color:#ffe17b}
+a{color:#9bc7ff}
+footer{text-align:center;color:#aab4c8;padding:24px;font-size:12px}
+@media(max-width:550px){
+ main{padding:12px}
+ .stats{gap:7px}
+ .stat{padding:10px}
+ .stat h2{font-size:18px}
+ .searchrow{flex-wrap:wrap}
+ .searchrow input{flex-basis:100%}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>⚡ PokéVault</h1>
+  <p>Scan. Collect. Track your Pokémon card value.</p>
+</header>
+
+<main>
+  <div class="stats">
+    <div class="stat">
+      <span>Collection Value (USD)</span>
+      <h2 id="total">$0.00</h2>
+    </div>
+    <div class="stat">
+      <span>Unique Cards</span>
+      <h2 id="unique">0</h2>
+    </div>
+    <div class="stat">
+      <span>Total Cards Owned</span>
+      <h2 id="count">0</h2>
+    </div>
+  </div>
+
+  <section class="panel">
+    <h2>📸 Find a Pokémon Card</h2>
+    <p class="hint">
+      Take a picture or upload a card photo, then search for its
+      name below. Check the set and card number to select the
+      exact version.
+    </p>
+    <input id="photo" type="file" accept="image/*" capture="environment">
+    <img id="preview" alt="Your card photo"
+      style="display:none;width:130px;max-height:190px;object-fit:contain">
+    <div class="searchrow">
+      <input id="query" placeholder="e.g. Charizard, Pikachu, Umbreon">
+      <button id="searchBtn">Search Cards</button>
+    </div>
+    <p id="message" role="status"></p>
+    <div id="results" class="cards"></div>
+  </section>
+
+  <section class="panel" style="margin-top:22px">
+    <h2>💎 My Collection</h2>
+    <p class="hint">
+      Your collection is saved in this browser. Prices are estimates,
+      not guaranteed selling prices. The total uses available
+      TCGplayer market prices in USD.
+    </p>
+    <div id="collection" class="cards"></div>
+  </section>
+</main>
+<footer>
+  Unofficial fan-made tracker. Pokémon is a trademark of its respective owners.
+  Market prices can change.
+</footer>
+
+<script>
+const API = "https://api.pokemontcg.io/v2/cards";
+const KEY = "pokevault_collection_v1";
+
+let collection = {};
+try {
+  collection = JSON.parse(localStorage.getItem(KEY) || "{}");
+} catch {
+  collection = {};
+}
+
+const $ = id => document.getElementById(id);
+const money = n => "$" + n.toLocaleString("en-US", {
+  minimumFractionDigits: 2, maximumFractionDigits: 2
+});
+
+function save() {
+  localStorage.setItem(KEY, JSON.stringify(collection));
+  renderCollection();
+}
+
+function getPrice(card) {
+  const prices = card.tcgplayer?.prices || {};
+  const variantOrder = [
+    "holofoil", "normal", "reverseHolofoil",
+    "1stEditionHolofoil", "1stEditionNormal"
+  ];
+
+  for (const variant of variantOrder) {
+    const p = prices[variant];
+    if (p && Number(p.market) > 0) return Number(p.market);
+  }
+  return 0;
+}
+
+function priceDetails(card) {
+  const prices = card.tcgplayer?.prices || {};
+  const rows = Object.entries(prices)
+    .filter(([, p]) => p && (
+      p.market != null || p.low != null || p.mid != null
+    ));
+
+  if (!rows.length) {
+    return "<p>No TCGplayer pricing available.</p>";
+  }
+
+  return rows.map(([variant, p]) => `
+    <p><b>${variant}</b><br>
+    Market: ${p.market != null ? money(Number(p.market)) : "N/A"}
+    · Low: ${p.low != null ? money(Number(p.low)) : "N/A"}
+    · Mid: ${p.mid != null ? money(Number(p.mid)) : "N/A"}
+    </p>
+  `).join("");
+}
+
+function cardHTML(card, inCollection = false) {
+  const price = getPrice(card);
+  const quantity = collection[card.id]?.quantity || 1;
+
+  return `
+    <article class="card">
+      <img src="${card.images?.small || ""}"
+           alt="${escapeHTML(card.name)}" loading="lazy">
+      <h3>${escapeHTML(card.name)}</h3>
+      <p>
+        Set: ${escapeHTML(card.set?.name || "Unknown")}<br>
+        Number: ${escapeHTML(card.number || "?")}<br>
+        Rarity: ${escapeHTML(card.rarity || "Unknown")}
+      </p>
+      <div class="price">
+        ${price ? money(price) : "Price unavailable"}
+      </div>
+      ${priceDetails(card)}
+      ${inCollection ? `
+        <label>Quantity</label>
+        <input type="number" min="1" max="999"
+          value="${quantity}" data-qty="${card.id}">
+        <button class="remove" data-remove="${card.id}">
+          Remove Card
+        </button>
+      ` : `
+        <button data-add="${card.id}">＋ Add to Collection</button>
+      `}
+      ${card.tcgplayer?.url ? `
+        <a href="${safeURL(card.tcgplayer.url)}"
+           target="_blank" rel="noopener noreferrer">
+           View TCGplayer listing
+        </a>` : ""}
+      ${card.cardmarket?.url ? `
+        <a href="${safeURL(card.cardmarket.url)}"
+           target="_blank" rel="noopener noreferrer">
+           View Cardmarket listing
+        </a>` : ""}
+    </article>
+  `;
+}
+
+function escapeHTML(value) {
+  return String(value).replace(/[&<>"']/g, c => ({
+    "&":"&amp;", "<":"&lt;", ">":"&gt;",
+    '"':"&quot;", "'":"&#39;"
+  })[c]);
+}
+
+function safeURL(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.href : "#";
+  } catch {
+    return "#";
+  }
+}
+
+async function searchCards() {
+  const query = $("query").value.trim();
+  if (!query) {
+    $("message").textContent = "Enter a card name first.";
+    return;
+  }
+
+  $("searchBtn").disabled = true;
+  $("message").textContent = "Searching the card database...";
+  $("results").innerHTML = "";
+
+  try {
+    const q = `name:"${query.replace(/["\\]/g, "")}"`;
+    const url = API + "?q=" + encodeURIComponent(q) +
+      "&orderBy=name&pageSize=30";
+
+    const response = await fetch(url);
+    if (!response.ok) throw new Error("Card database request failed.");
+
+    const data = await response.json();
+    const cards = data.data || [];
+
+    if (!cards.length) {
+      $("message").textContent =
+        "No exact name matches. Try a shorter name, like Pikachu.";
+      return;
+    }
+
+    $("message").textContent =
+      `Found ${cards.length} results. Check the set and card number.`;
+
+    $("results").innerHTML =
+      cards.map(card => cardHTML(card)).join("");
+
+    $("results").querySelectorAll("[data-add]").forEach(button => {
+      button.addEventListener("click", () => {
+        const card = cards.find(c => c.id === button.dataset.add);
+        if (!card) return;
+
+        if (collection[card.id]) {
+          collection[card.id].quantity++;
+        } else {
+          collection[card.id] = {
+            card,
+            quantity: 1
+          };
+        }
+        save();
+        $("message").textContent =
+          card.name + " added to your collection!";
+      });
+    });
+  } catch (error) {
+    $("message").textContent =
+      "Could not load cards. Check your internet connection and try again.";
+    console.error(error);
+  } finally {
+    $("searchBtn").disabled = false;
+  }
+}
+
+function renderCollection() {
+  const entries = Object.values(collection);
+  let total = 0;
+  let count = 0;
+
+  for (const entry of entries) {
+    const quantity = Math.max(1, Number(entry.quantity) || 1);
+    total += getPrice(entry.card) * quantity;
+    count += quantity;
+  }
+
+  $("total").textContent = money(total);
+  $("unique").textContent = entries.length;
+  $("count").textContent = count;
+
+  $("collection").innerHTML = entries.length
+    ? entries.map(entry => cardHTML(entry.card, true)).join("")
+    : "<p>Your collection is empty. Search for a card and add it!</p>";
+
+  $("collection").querySelectorAll("[data-qty]").forEach(input => {
+    input.addEventListener("change", () => {
+      const id = input.dataset.qty;
+      const quantity = Math.max(1, Math.min(999,
+        Number.parseInt(input.value, 10) || 1));
+      collection[id].quantity = quantity;
+      save();
+    });
+  });
+
+  $("collection").querySelectorAll("[data-remove]").forEach(button => {
+    button.addEventListener("click", () => {
+      delete collection[button.dataset.remove];
+      save();
+    });
+  });
+}
+
+$("searchBtn").addEventListener("click", searchCards);
+$("query").addEventListener("keydown", event => {
+  if (event.key === "Enter") searchCards();
+});
+
+$("photo").addEventListener("change", () => {
+  const file = $("photo").files[0];
+  if (!file) return;
+  $("preview").src = URL.createObjectURL(file);
+  $("preview").style.display = "block";
+});
+
+renderCollection();
+</script>
+</body>
+</html>
